@@ -259,7 +259,7 @@ fn attack_ds2(dataset: &str) {
         .concat();
 
     let resampled_traces = Array3::from_shape_vec((16, 150, 50000), resampled_traces).unwrap();
-    // plot_ds1(&resampled_traces.slice(s![0, 0..50, ..]).to_owned());
+    plot_ds1(&resampled_traces.slice(s![0, 0..50, ..]).to_owned());
 
     let key = cpa_attack(&resampled_traces, &hamming_weights);
 
