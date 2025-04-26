@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use ndarray::{Array, Array2, Array3, Axis};
 use ndarray_stats::QuantileExt;
-use std::error::Error;
 use std::fs::File;
 use std::io::{read_to_string, Write};
 use std::path::Path;
@@ -42,6 +41,24 @@ fn load_traces(dataset: &str) -> Array3<f64> {
         .collect::<Vec<_>>();
 
     Array::from_shape_vec((16, 150, traces[0].len() / 150), traces.concat()).unwrap()
+}
+
+fn load_clocks(dataset: &str) -> Array3<f64> {
+    let clocks = (0..16)
+        .map(|x| {
+            let path = format!("{dataset}/clock{x}.txt");
+            let path = Path::new(&path);
+            let file = File::open(path).unwrap();
+            let clock = read_to_string(file)
+                .unwrap()
+                .split_whitespace()
+                .map(|x| x.parse::<f64>().unwrap())
+                .collect::<Vec<_>>();
+            return clock;
+        })
+        .collect::<Vec<_>>();
+
+    Array::from_shape_vec((16, 150, clocks[0].len() / 150), clocks.concat()).unwrap()
 }
 
 fn load_clear_text(path: &str) -> Array2<i32> {
@@ -91,26 +108,18 @@ fn pearson_correlation(x: &ndarray::ArrayView1<f64>, y: &ndarray::ArrayView1<f64
     (numerator / (denom_x * denom_y)).abs()
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let args = env::args().collect::<Vec<_>>();
-
-    if args.len() != 2 {
-        panic!("Expected exactly one argument");
-    }
-
-    let dataset = args[1].as_str();
-
+fn attack_ds1(dataset: &str) {
     // 150 x 16
     let clear_text = load_clear_text(&format!("{dataset}/cleartext.txt"));
     // 16 x 150 x 50000
-    let trace = load_traces(dataset);
+    let traces = load_traces(dataset);
     // 16 x 256 x 150
     let hamming_weights = calculate_hamming_weights(&clear_text);
 
     let key = (0..16)
         .map(|byte_index| {
             // 150 x 50000
-            let byte_power = trace.index_axis(Axis(0), byte_index);
+            let byte_power = traces.index_axis(Axis(0), byte_index);
 
             // 256 x 150
             let byte_hw = hamming_weights.index_axis(Axis(0), byte_index);
@@ -139,5 +148,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     dbg!(&key);
     dbg!(key.iter().sum::<i32>());
     assert_eq!(key.iter().sum::<i32>(), 1712);
-    Ok(())
+}
+
+fn attack_ds2(dataset: &str) {
+    // assert_eq!(key.iter().sum::<i32>(), 1434);
+}
+
+fn main() {
+    let args = env::args().collect::<Vec<_>>();
+
+    if args.len() != 2 {
+        panic!("Expected exactly one argument");
+    }
+
+    if args[1].ends_with("1") {
+        attack_ds1(args[1].as_str());
+    }
+
+    if args[1].ends_with("2") {
+        attack_ds2(args[1].as_str());
+    }
 }
