@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 ndarray = "0.16.1"
 ndarray-stats = "0.6.0"
+plotly = "0.12.1"

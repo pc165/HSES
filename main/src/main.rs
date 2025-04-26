@@ -1,8 +1,10 @@
 #![allow(dead_code)]
-use ndarray::{Array, Array2, Array3, Axis};
+use ndarray::{s, Array, Array2, Array3, Axis};
 use ndarray_stats::QuantileExt;
+use plotly::Plot;
 use std::fs::File;
 use std::io::{read_to_string, Write};
+use std::iter::zip;
 use std::path::Path;
 use std::{env, io};
 
@@ -108,13 +110,60 @@ fn pearson_correlation(x: &ndarray::ArrayView1<f64>, y: &ndarray::ArrayView1<f64
     (numerator / (denom_x * denom_y)).abs()
 }
 
+fn plot1(trace: Array2<f64>) {
+    let mut plot = Plot::new();
+
+    for row in trace.rows().into_iter().enumerate() {
+        let (i, trace) = row;
+
+        let x_indices: Vec<usize> = (0..trace.len()).collect();
+
+        use plotly::common::Mode;
+
+        let power_trace = plotly::Scatter::new(x_indices.clone(), trace.to_vec())
+            .name(format!("Power {i}"))
+            .mode(Mode::Lines);
+
+        plot.add_trace(power_trace);
+    }
+
+    plot.show();
+}
+
+fn plot2(trace: Array2<f64>, clock: Array2<f64>) {
+    let mut plot = Plot::new();
+
+    for row in zip(trace.rows(), clock.rows()).enumerate() {
+        let (i, (trace, clock)) = row;
+
+        let x_indices: Vec<usize> = (0..trace.len()).collect();
+
+        use plotly::common::Mode;
+
+        let power_trace = plotly::Scatter::new(x_indices.clone(), trace.to_vec())
+            .name(format!("Power {i}"))
+            .mode(Mode::Lines);
+
+        let clock_trace = plotly::Scatter::new(x_indices, clock.to_vec())
+            .name(format!("Clock {i}"))
+            .mode(Mode::Lines);
+
+        plot.add_trace(power_trace);
+        plot.add_trace(clock_trace);
+    }
+
+    plot.show();
+}
+
 fn attack_ds1(dataset: &str) {
     // 150 x 16
     let clear_text = load_clear_text(&format!("{dataset}/cleartext.txt"));
-    // 16 x 150 x 50000
-    let traces = load_traces(dataset);
     // 16 x 256 x 150
     let hamming_weights = calculate_hamming_weights(&clear_text);
+    // 16 x 150 x 50000
+    let traces = load_traces(dataset);
+    let trace = traces.slice(s![0, 0..15, 0..300]).to_owned();
+    plot1(trace);
 
     let key = (0..16)
         .map(|byte_index| {
@@ -151,6 +200,23 @@ fn attack_ds1(dataset: &str) {
 }
 
 fn attack_ds2(dataset: &str) {
+    // 150 x 16
+    let clear_text = load_clear_text(&format!("{dataset}/cleartext.txt"));
+    // 16 x 256 x 150
+    let hamming_weights = calculate_hamming_weights(&clear_text);
+    // 16 x 150 x 50000
+    let traces = load_traces(dataset);
+    // 16 x 150 x 50000
+    let clocks = load_clocks(dataset);
+
+    let trace = traces.slice(s![0, 0..15, 0..300]).to_owned();
+    let clock = clocks.slice(s![0, 0..15, 0..300]).to_owned();
+    plot2(trace, clock);
+
+    // let key = (0..16).map(|byte_index| 1).collect::<Vec<_>>();
+    //
+    // dbg!(&key);
+    // dbg!(key.iter().sum::<i32>());
     // assert_eq!(key.iter().sum::<i32>(), 1434);
 }
 
