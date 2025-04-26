@@ -1,5 +1,5 @@
-#![allow(dead_code)]
-use ndarray::{s, Array, Array2, Array3, Axis};
+#![allow(dead_code, unused)]
+use ndarray::{s, Array, Array1, Array2, Array3, ArrayBase, Axis, Ix1, OwnedRepr};
 use ndarray_stats::QuantileExt;
 use plotly::Plot;
 use std::fs::File;
@@ -37,6 +37,7 @@ fn load_traces(dataset: &str) -> Array3<f64> {
                 .unwrap()
                 .split_whitespace()
                 .map(|x| x.parse::<f64>().unwrap())
+                .map(|x| if x > 0.8 { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>();
             return trace;
         })
@@ -55,6 +56,7 @@ fn load_clocks(dataset: &str) -> Array3<f64> {
                 .unwrap()
                 .split_whitespace()
                 .map(|x| x.parse::<f64>().unwrap())
+                .map(|x| if x > 0.5 { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>();
             return clock;
         })
@@ -110,7 +112,7 @@ fn pearson_correlation(x: &ndarray::ArrayView1<f64>, y: &ndarray::ArrayView1<f64
     (numerator / (denom_x * denom_y)).abs()
 }
 
-fn plot1(trace: Array2<f64>) {
+fn plot_ds1(trace: &Array2<f64>) {
     let mut plot = Plot::new();
 
     for row in trace.rows().into_iter().enumerate() {
@@ -130,7 +132,7 @@ fn plot1(trace: Array2<f64>) {
     plot.show();
 }
 
-fn plot2(trace: Array2<f64>, clock: Array2<f64>) {
+fn plot_ds2(trace: &Array2<f64>, clock: &Array2<f64>) {
     let mut plot = Plot::new();
 
     for row in zip(trace.rows(), clock.rows()).enumerate() {
@@ -162,8 +164,8 @@ fn attack_ds1(dataset: &str) {
     let hamming_weights = calculate_hamming_weights(&clear_text);
     // 16 x 150 x 50000
     let traces = load_traces(dataset);
-    let trace = traces.slice(s![0, 0..15, 0..300]).to_owned();
-    plot1(trace);
+    // let trace = traces.slice(s![0, 0..2, 0..300]).to_owned();
+    // plot1(&trace);
 
     let key = (0..16)
         .map(|byte_index| {
@@ -199,6 +201,65 @@ fn attack_ds1(dataset: &str) {
     assert_eq!(key.iter().sum::<i32>(), 1712);
 }
 
+fn plot_clocks(clock_a: &Array1<f64>, clock_b: &Array1<f64>) {
+    let mut plot = Plot::new();
+
+    let x_indices: Vec<usize> = (0..clock_a.len()).collect();
+
+    use plotly::common::Mode;
+
+    let power_trace = plotly::Scatter::new(x_indices.clone(), clock_a.to_vec())
+        .name("Clock A")
+        .mode(Mode::Lines);
+
+    let clock_trace = plotly::Scatter::new(x_indices, clock_b.to_vec())
+        .name("Clock B")
+        .mode(Mode::Lines);
+
+    plot.add_trace(power_trace);
+    plot.add_trace(clock_trace);
+    plot.show()
+}
+
+fn find_edges(clock: &Array1<f64>) -> Array1<f64> {
+    Array1::from_vec(
+        (1..clock.len())
+            .map(|i| {
+                if clock[i] > 0.5 && clock[i - 1] < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn arg_of_ones(array: &Array1<f64>) -> Array1<isize> {
+    array
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &val)| if val == 1.0 { Some(idx as isize) } else { None })
+        .collect()
+}
+
+fn calculate_sync_offsets(
+    clock_a: &Array1<f64>,
+    clock_b: &Array1<f64>,
+) -> ArrayBase<OwnedRepr<isize>, Ix1> {
+    let edges_a = find_edges(clock_a);
+    let edges_b = find_edges(clock_b);
+    // plot_clocks(&clock_a, &clock_b);
+    // plot_clocks(&edges_a, &edges_b);
+
+    let edge_indices_a = arg_of_ones(&edges_a);
+    let edge_indices_b = arg_of_ones(&edges_b);
+
+    let offsets = edge_indices_a - edge_indices_b;
+
+    offsets
+}
+
 fn attack_ds2(dataset: &str) {
     // 150 x 16
     let clear_text = load_clear_text(&format!("{dataset}/cleartext.txt"));
@@ -209,9 +270,15 @@ fn attack_ds2(dataset: &str) {
     // 16 x 150 x 50000
     let clocks = load_clocks(dataset);
 
-    let trace = traces.slice(s![0, 0..15, 0..300]).to_owned();
-    let clock = clocks.slice(s![0, 0..15, 0..300]).to_owned();
-    plot2(trace, clock);
+    let clock = clocks.slice(s![0, 0..2, 0..5000]).to_owned();
+    // let trace = traces.slice(s![0, 0..2, 0..5000]).to_owned();
+    // plot_ds2(&trace, &clock);
+
+    let clock0 = clocks.slice(s![0, 0, ..]).to_owned();
+    let clock1 = clocks.slice(s![0, 1, ..]).to_owned();
+    let offsets = calculate_sync_offsets(&clock0, &clock1);
+
+    println!("{:#?}", offsets);
 
     // let key = (0..16).map(|byte_index| 1).collect::<Vec<_>>();
     //
