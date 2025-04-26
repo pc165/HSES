@@ -2,6 +2,7 @@
 
 mod plots;
 
+use crate::plots::plot_ds1;
 use ndarray::{s, Array, Array1, Array2, Array3, Axis};
 use ndarray_stats::QuantileExt;
 use std::fs::File;
@@ -153,8 +154,8 @@ fn resample(ref_clock: &Array1<f64>, trace: &Array1<f64>, clock: &Array1<f64>) -
             }
 
             let index = ref_indices[edge_count];
-            let left = index - 10;
-            let right = index + 10;
+            let left = index - 20;
+            let right = index + 20;
             let target_index = trace_index + offsets[edge_count] as usize;
 
             if left <= 0 || right >= trace.len() || target_index >= trace.len() {
@@ -193,7 +194,12 @@ fn cpa_attack(traces: &Array3<f64>, hamming_weights: &Array3<f64>) -> Vec<i32> {
                 // 50000
                 let corr_for_each_sample = byte_power.map_axis(Axis(0), |sample| {
                     // 150 x 150
-                    pearson_correlation(&sample, &hw)
+                    let corr = pearson_correlation(&sample, &hw);
+                    if corr.is_nan() {
+                        0.0
+                    } else {
+                        corr
+                    }
                 });
 
                 corr_for_each_sample.max().unwrap().to_owned()
@@ -253,10 +259,9 @@ fn attack_ds2(dataset: &str) {
         .concat();
 
     let resampled_traces = Array3::from_shape_vec((16, 150, 50000), resampled_traces).unwrap();
-    let key = cpa_attack(&resampled_traces, &hamming_weights);
+    // plot_ds1(&resampled_traces.slice(s![0, 0..50, ..]).to_owned());
 
-    // let trace = resampled_traces.slice(s![0, 0..50, 0..300]).to_owned();
-    // plot_ds1(&trace);
+    let key = cpa_attack(&resampled_traces, &hamming_weights);
 
     dbg!(&key);
     dbg!(key.iter().sum::<i32>());
