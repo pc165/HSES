@@ -1,10 +1,11 @@
 #![allow(dead_code, unused)]
-use ndarray::{s, Array, Array1, Array2, Array3, ArrayBase, Axis, Ix1, OwnedRepr};
+
+mod plots;
+
+use ndarray::{s, Array, Array1, Array2, Array3, Axis};
 use ndarray_stats::QuantileExt;
-use plotly::Plot;
 use std::fs::File;
 use std::io::{read_to_string, Write};
-use std::iter::zip;
 use std::path::Path;
 use std::{env, io};
 
@@ -37,7 +38,6 @@ fn load_traces(dataset: &str) -> Array3<f64> {
                 .unwrap()
                 .split_whitespace()
                 .map(|x| x.parse::<f64>().unwrap())
-                .map(|x| if x > 0.8 { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>();
             return trace;
         })
@@ -111,62 +111,72 @@ fn pearson_correlation(x: &ndarray::ArrayView1<f64>, y: &ndarray::ArrayView1<f64
 
     (numerator / (denom_x * denom_y)).abs()
 }
-
-fn plot_ds1(trace: &Array2<f64>) {
-    let mut plot = Plot::new();
-
-    for row in trace.rows().into_iter().enumerate() {
-        let (i, trace) = row;
-
-        let x_indices: Vec<usize> = (0..trace.len()).collect();
-
-        use plotly::common::Mode;
-
-        let power_trace = plotly::Scatter::new(x_indices.clone(), trace.to_vec())
-            .name(format!("Power {i}"))
-            .mode(Mode::Lines);
-
-        plot.add_trace(power_trace);
-    }
-
-    plot.show();
+fn find_edges(clock: &Array1<f64>) -> Array1<f64> {
+    (1..clock.len())
+        .map(|i| {
+            if clock[i] > 0.5 && clock[i - 1] < 0.5 {
+                1.0
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
-fn plot_ds2(trace: &Array2<f64>, clock: &Array2<f64>) {
-    let mut plot = Plot::new();
-
-    for row in zip(trace.rows(), clock.rows()).enumerate() {
-        let (i, (trace, clock)) = row;
-
-        let x_indices: Vec<usize> = (0..trace.len()).collect();
-
-        use plotly::common::Mode;
-
-        let power_trace = plotly::Scatter::new(x_indices.clone(), trace.to_vec())
-            .name(format!("Power {i}"))
-            .mode(Mode::Lines);
-
-        let clock_trace = plotly::Scatter::new(x_indices, clock.to_vec())
-            .name(format!("Clock {i}"))
-            .mode(Mode::Lines);
-
-        plot.add_trace(power_trace);
-        plot.add_trace(clock_trace);
-    }
-
-    plot.show();
+fn arg_of_ones(array: &Array1<f64>) -> Array1<usize> {
+    array
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, &val)| if val == 1.0 { Some(idx) } else { None })
+        .collect()
 }
 
-fn attack_ds1(dataset: &str) {
-    // 150 x 16
-    let clear_text = load_clear_text(&format!("{dataset}/cleartext.txt"));
-    // 16 x 256 x 150
-    let hamming_weights = calculate_hamming_weights(&clear_text);
-    // 16 x 150 x 50000
-    let traces = load_traces(dataset);
-    // let trace = traces.slice(s![0, 0..2, 0..300]).to_owned();
-    // plot1(&trace);
+fn resample(ref_clock: &Array1<f64>, trace: &Array1<f64>, clock: &Array1<f64>) -> Array1<f64> {
+    let ref_edges = find_edges(ref_clock);
+    let clock_edges = find_edges(clock);
+    // plot_clocks(&ref_clock, &clock);
 
+    let ref_indices = arg_of_ones(&ref_edges);
+    let edge_indices = arg_of_ones(&clock_edges);
+
+    let min_len = std::cmp::min(ref_indices.len(), edge_indices.len());
+    let ref_indices = ref_indices.slice(s![..min_len]).to_owned();
+    let edge_indices = edge_indices.slice(s![..min_len]).to_owned();
+
+    let offsets = edge_indices.map(|x| *x as isize) - ref_indices.map(|x| *x as isize);
+
+    let mut edge_count = 0;
+    let resampled_trace = (0..trace.len())
+        .map(|trace_index| {
+            if edge_count >= edge_indices.len() {
+                return 0.0;
+            }
+
+            let index = ref_indices[edge_count];
+            let left = index - 10;
+            let right = index + 10;
+            let target_index = trace_index + offsets[edge_count] as usize;
+
+            if left <= 0 || right >= trace.len() || target_index >= trace.len() {
+                return 0.0;
+            }
+
+            if trace_index >= left && trace_index < right {
+                return trace[target_index];
+            }
+
+            if trace_index == right {
+                edge_count += 1;
+            }
+
+            0.0
+        })
+        .collect::<Array1<_>>();
+
+    resampled_trace
+}
+
+fn cpa_attack(traces: &Array3<f64>, hamming_weights: &Array3<f64>) -> Vec<i32> {
     let key = (0..16)
         .map(|byte_index| {
             // 150 x 50000
@@ -195,69 +205,24 @@ fn attack_ds1(dataset: &str) {
             guess as i32
         })
         .collect::<Vec<_>>();
+    key
+}
+
+fn attack_ds1(dataset: &str) {
+    // 150 x 16
+    let clear_text = load_clear_text(&format!("{dataset}/cleartext.txt"));
+    // 16 x 256 x 150
+    let hamming_weights = calculate_hamming_weights(&clear_text);
+    // 16 x 150 x 50000
+    let traces = load_traces(dataset);
+    // let trace = traces.slice(s![0, 0..2, 0..300]).to_owned();
+    // plot1(&trace);
+
+    let key = cpa_attack(&traces, &hamming_weights);
 
     dbg!(&key);
     dbg!(key.iter().sum::<i32>());
     assert_eq!(key.iter().sum::<i32>(), 1712);
-}
-
-fn plot_clocks(clock_a: &Array1<f64>, clock_b: &Array1<f64>) {
-    let mut plot = Plot::new();
-
-    let x_indices: Vec<usize> = (0..clock_a.len()).collect();
-
-    use plotly::common::Mode;
-
-    let power_trace = plotly::Scatter::new(x_indices.clone(), clock_a.to_vec())
-        .name("Clock A")
-        .mode(Mode::Lines);
-
-    let clock_trace = plotly::Scatter::new(x_indices, clock_b.to_vec())
-        .name("Clock B")
-        .mode(Mode::Lines);
-
-    plot.add_trace(power_trace);
-    plot.add_trace(clock_trace);
-    plot.show()
-}
-
-fn find_edges(clock: &Array1<f64>) -> Array1<f64> {
-    Array1::from_vec(
-        (1..clock.len())
-            .map(|i| {
-                if clock[i] > 0.5 && clock[i - 1] < 0.5 {
-                    1.0
-                } else {
-                    0.0
-                }
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn arg_of_ones(array: &Array1<f64>) -> Array1<isize> {
-    array
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, &val)| if val == 1.0 { Some(idx as isize) } else { None })
-        .collect()
-}
-
-fn calculate_sync_offsets(
-    clock_a: &Array1<f64>,
-    clock_b: &Array1<f64>,
-) -> ArrayBase<OwnedRepr<isize>, Ix1> {
-    let edges_a = find_edges(clock_a);
-    let edges_b = find_edges(clock_b);
-    // plot_clocks(&clock_a, &clock_b);
-    // plot_clocks(&edges_a, &edges_b);
-
-    let edge_indices_a = arg_of_ones(&edges_a);
-    let edge_indices_b = arg_of_ones(&edges_b);
-
-    let offsets = edge_indices_a - edge_indices_b;
-
-    offsets
 }
 
 fn attack_ds2(dataset: &str) {
@@ -270,21 +235,32 @@ fn attack_ds2(dataset: &str) {
     // 16 x 150 x 50000
     let clocks = load_clocks(dataset);
 
-    let clock = clocks.slice(s![0, 0..2, 0..5000]).to_owned();
-    // let trace = traces.slice(s![0, 0..2, 0..5000]).to_owned();
-    // plot_ds2(&trace, &clock);
+    let ref_clock = clocks.slice(s![0, 0, ..]).to_owned();
 
-    let clock0 = clocks.slice(s![0, 0, ..]).to_owned();
-    let clock1 = clocks.slice(s![0, 1, ..]).to_owned();
-    let offsets = calculate_sync_offsets(&clock0, &clock1);
+    let resampled_traces = (0..16)
+        .map(|byte| {
+            (0..150)
+                .map(|x| {
+                    let trace = traces.slice(s![byte, x, ..]).to_owned();
+                    let clock = clocks.slice(s![byte, x, ..]).to_owned();
+                    let resampled_trace = resample(&ref_clock, &trace, &clock);
+                    resampled_trace.to_vec()
+                })
+                .collect::<Vec<_>>()
+                .concat()
+        })
+        .collect::<Vec<_>>()
+        .concat();
 
-    println!("{:#?}", offsets);
+    let resampled_traces = Array3::from_shape_vec((16, 150, 50000), resampled_traces).unwrap();
+    let key = cpa_attack(&resampled_traces, &hamming_weights);
 
-    // let key = (0..16).map(|byte_index| 1).collect::<Vec<_>>();
-    //
-    // dbg!(&key);
-    // dbg!(key.iter().sum::<i32>());
-    // assert_eq!(key.iter().sum::<i32>(), 1434);
+    // let trace = resampled_traces.slice(s![0, 0..50, 0..300]).to_owned();
+    // plot_ds1(&trace);
+
+    dbg!(&key);
+    dbg!(key.iter().sum::<i32>());
+    assert_eq!(key.iter().sum::<i32>(), 1434);
 }
 
 fn main() {
