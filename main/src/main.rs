@@ -1,14 +1,13 @@
-#![allow(dead_code, unused)]
+#![allow(dead_code)]
 
 mod plots;
 
-use crate::plots::plot_ds1;
-use ndarray::{s, Array, Array1, Array2, Array3, Axis};
-use ndarray_stats::QuantileExt;
+use ndarray::{s, Array, Array1, Array2, Array3};
+use rayon::prelude::*;
+use std::env;
 use std::fs::File;
-use std::io::{read_to_string, Write};
+use std::io::read_to_string;
 use std::path::Path;
-use std::{env, io};
 
 const SBOX: [i32; 256] = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -31,7 +30,8 @@ const SBOX: [i32; 256] = [
 
 fn load_traces(dataset: &str) -> Array3<f64> {
     let traces = (0..16)
-        .map(|x| {
+        .into_par_iter()
+        .flat_map(|x| {
             let path = format!("{dataset}/trace{x}.txt");
             let path = Path::new(&path);
             let file = File::open(path).unwrap();
@@ -44,12 +44,13 @@ fn load_traces(dataset: &str) -> Array3<f64> {
         })
         .collect::<Vec<_>>();
 
-    Array::from_shape_vec((16, 150, traces[0].len() / 150), traces.concat()).unwrap()
+    Array::from_shape_vec((16, 150, 50000), traces).unwrap()
 }
 
 fn load_clocks(dataset: &str) -> Array3<f64> {
     let clocks = (0..16)
-        .map(|x| {
+        .into_par_iter()
+        .flat_map(|x| {
             let path = format!("{dataset}/clock{x}.txt");
             let path = Path::new(&path);
             let file = File::open(path).unwrap();
@@ -63,7 +64,7 @@ fn load_clocks(dataset: &str) -> Array3<f64> {
         })
         .collect::<Vec<_>>();
 
-    Array::from_shape_vec((16, 150, clocks[0].len() / 150), clocks.concat()).unwrap()
+    Array::from_shape_vec((16, 150, 50000), clocks).unwrap()
 }
 
 fn load_clear_text(path: &str) -> Array2<i32> {
@@ -81,6 +82,7 @@ fn load_clear_text(path: &str) -> Array2<i32> {
 
 fn calculate_hamming_weights(clear_text: &Array2<i32>) -> Array3<f64> {
     let hamming_weights = (0..16)
+        .into_par_iter()
         .flat_map(|byte_index| {
             (0..256)
                 .flat_map(|key_guess| {
@@ -102,6 +104,10 @@ fn pearson_correlation(x: &ndarray::ArrayView1<f64>, y: &ndarray::ArrayView1<f64
     let mean_x = x.mean().unwrap();
     let mean_y = y.mean().unwrap();
 
+    if mean_x == 0.0 || mean_y == 0.0 {
+        return 0.0;
+    }
+
     let diff_x = x - mean_x;
     let diff_y = y - mean_y;
 
@@ -112,6 +118,7 @@ fn pearson_correlation(x: &ndarray::ArrayView1<f64>, y: &ndarray::ArrayView1<f64
 
     (numerator / (denom_x * denom_y)).abs()
 }
+
 fn find_edges(clock: &Array1<f64>) -> Array1<f64> {
     (1..clock.len())
         .map(|i| {
@@ -132,17 +139,18 @@ fn arg_of_ones(array: &Array1<f64>) -> Array1<usize> {
         .collect()
 }
 
-fn resample(ref_clock: &Array1<f64>, trace: &Array1<f64>, clock: &Array1<f64>) -> Array1<f64> {
-    let ref_edges = find_edges(ref_clock);
+fn resample(
+    ref_indices: &Array1<usize>,
+    trace: &Array1<f64>,
+    clock: &Array1<f64>,
+    window_size: usize,
+) -> Array1<f64> {
     let clock_edges = find_edges(clock);
-    // plot_clocks(&ref_clock, &clock);
-
-    let ref_indices = arg_of_ones(&ref_edges);
     let edge_indices = arg_of_ones(&clock_edges);
 
     let min_len = std::cmp::min(ref_indices.len(), edge_indices.len());
-    let ref_indices = ref_indices.slice(s![..min_len]).to_owned();
-    let edge_indices = edge_indices.slice(s![..min_len]).to_owned();
+    let ref_indices = ref_indices.slice(s![..min_len]);
+    let edge_indices = edge_indices.slice(s![..min_len]);
 
     let offsets = edge_indices.map(|x| *x as isize) - ref_indices.map(|x| *x as isize);
 
@@ -154,8 +162,8 @@ fn resample(ref_clock: &Array1<f64>, trace: &Array1<f64>, clock: &Array1<f64>) -
             }
 
             let index = ref_indices[edge_count];
-            let left = index - 20;
-            let right = index + 20;
+            let left = index - window_size / 2;
+            let right = index + window_size / 2;
             let target_index = trace_index + offsets[edge_count] as usize;
 
             if left <= 0 || right >= trace.len() || target_index >= trace.len() {
@@ -181,34 +189,36 @@ fn cpa_attack(traces: &Array3<f64>, hamming_weights: &Array3<f64>) -> Vec<i32> {
     let key = (0..16)
         .map(|byte_index| {
             // 150 x 50000
-            let byte_power = traces.index_axis(Axis(0), byte_index);
+            let byte_power = traces.slice(s![byte_index, .., ..]);
 
             // 256 x 150
-            let byte_hw = hamming_weights.index_axis(Axis(0), byte_index);
+            let byte_hw = hamming_weights.slice(s![byte_index, .., ..]);
 
-            print!("Calculating byte {byte_index}... ");
-            io::stdout().flush().unwrap();
+            println!("Calculating byte {byte_index}...");
 
             // 256 x 1
-            let byte_correlation = byte_hw.map_axis(Axis(1), |hw| {
-                // 50000
-                let corr_for_each_sample = byte_power.map_axis(Axis(0), |sample| {
-                    // 150 x 150
-                    let corr = pearson_correlation(&sample, &hw);
-                    if corr.is_nan() {
-                        0.0
-                    } else {
-                        corr
-                    }
-                });
+            let (byte_guess, _byte_correlation) = (0..256)
+                .into_par_iter()
+                .map(|key_idx| {
+                    // 150 x 1
+                    let hw = byte_hw.slice(s![key_idx, ..]);
 
-                corr_for_each_sample.max().unwrap().to_owned()
-            });
+                    let max_corr = (0..50000)
+                        .map(|sample_idx| {
+                            // 150 x 1
+                            let sample = byte_power.slice(s![.., sample_idx]);
+                            pearson_correlation(&sample, &hw)
+                        })
+                        .max_by(|a, b| a.partial_cmp(b).unwrap())
+                        .unwrap();
 
-            let guess = byte_correlation.argmax().unwrap();
+                    (key_idx, max_corr)
+                })
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap();
 
-            println!("{}", guess);
-            guess as i32
+            println!("byte {} {}", byte_index, byte_guess);
+            byte_guess
         })
         .collect::<Vec<_>>();
     key
@@ -242,24 +252,27 @@ fn attack_ds2(dataset: &str) {
     let clocks = load_clocks(dataset);
 
     let ref_clock = clocks.slice(s![0, 0, ..]).to_owned();
+    let ref_edges = find_edges(&ref_clock);
+    let ref_indices = arg_of_ones(&ref_edges);
 
     let resampled_traces = (0..16)
-        .map(|byte| {
+        .into_par_iter()
+        .flat_map(|byte| {
             (0..150)
-                .map(|x| {
+                .into_par_iter()
+                .flat_map(|x| {
                     let trace = traces.slice(s![byte, x, ..]).to_owned();
                     let clock = clocks.slice(s![byte, x, ..]).to_owned();
-                    let resampled_trace = resample(&ref_clock, &trace, &clock);
+
+                    let resampled_trace = resample(&ref_indices, &trace, &clock, 2);
                     resampled_trace.to_vec()
                 })
                 .collect::<Vec<_>>()
-                .concat()
         })
-        .collect::<Vec<_>>()
-        .concat();
+        .collect::<Vec<_>>();
 
     let resampled_traces = Array3::from_shape_vec((16, 150, 50000), resampled_traces).unwrap();
-    plot_ds1(&resampled_traces.slice(s![0, 0..50, ..]).to_owned());
+    // plot_ds1(&resampled_traces.slice(s![0, 0..50, ..]).to_owned());
 
     let key = cpa_attack(&resampled_traces, &hamming_weights);
 
