@@ -2,6 +2,7 @@
 
 mod plots;
 
+use crate::plots::{plot_dataset1, plot_dataset2};
 use ndarray::{s, Array, Array1, Array2, Array3};
 use rayon::prelude::*;
 use std::env;
@@ -28,23 +29,23 @@ const SBOX: [i32; 256] = [
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 ];
 
-fn load_traces(dataset: &str) -> Array3<f64> {
-    let traces = (0..16)
+fn load_power_traces(dataset: &str) -> Array3<f64> {
+    let power_traces = (0..16)
         .into_par_iter()
         .flat_map(|x| {
             let path = format!("{dataset}/trace{x}.txt");
             let path = Path::new(&path);
             let file = File::open(path).unwrap();
-            let trace = read_to_string(file)
+            let power_trace = read_to_string(file)
                 .unwrap()
                 .split_whitespace()
                 .map(|x| x.parse::<f64>().unwrap())
                 .collect::<Vec<_>>();
-            return trace;
+            return power_trace;
         })
         .collect::<Vec<_>>();
 
-    Array::from_shape_vec((16, 150, 50000), traces).unwrap()
+    Array::from_shape_vec((16, 150, 50000), power_traces).unwrap()
 }
 
 fn load_clocks(dataset: &str) -> Array3<f64> {
@@ -139,57 +140,11 @@ fn arg_of_ones(array: &Array1<f64>) -> Array1<usize> {
         .collect()
 }
 
-fn resample(
-    ref_indices: &Array1<usize>,
-    trace: &Array1<f64>,
-    clock: &Array1<f64>,
-    window_size: usize,
-) -> Array1<f64> {
-    let clock_edges = find_edges(clock);
-    let edge_indices = arg_of_ones(&clock_edges);
-
-    let min_len = std::cmp::min(ref_indices.len(), edge_indices.len());
-    let ref_indices = ref_indices.slice(s![..min_len]);
-    let edge_indices = edge_indices.slice(s![..min_len]);
-
-    let offsets = edge_indices.map(|x| *x as isize) - ref_indices.map(|x| *x as isize);
-
-    let mut edge_count = 0;
-    let resampled_trace = (0..trace.len())
-        .map(|trace_index| {
-            if edge_count >= edge_indices.len() {
-                return 0.0;
-            }
-
-            let index = ref_indices[edge_count];
-            let left = index - window_size / 2;
-            let right = index + window_size / 2;
-            let target_index = trace_index + offsets[edge_count] as usize;
-
-            if left <= 0 || right >= trace.len() || target_index >= trace.len() {
-                return 0.0;
-            }
-
-            if trace_index >= left && trace_index < right {
-                return trace[target_index];
-            }
-
-            if trace_index == right {
-                edge_count += 1;
-            }
-
-            0.0
-        })
-        .collect::<Array1<_>>();
-
-    resampled_trace
-}
-
-fn cpa_attack(traces: &Array3<f64>, hamming_weights: &Array3<f64>) -> Vec<i32> {
+fn cpa_attack(power_traces: &Array3<f64>, hamming_weights: &Array3<f64>) -> Vec<i32> {
     let key = (0..16)
         .map(|byte_index| {
             // 150 x 50000
-            let byte_power = traces.slice(s![byte_index, .., ..]);
+            let byte_power = power_traces.slice(s![byte_index, .., ..]);
 
             // 256 x 150
             let byte_hw = hamming_weights.slice(s![byte_index, .., ..]);
@@ -224,17 +179,86 @@ fn cpa_attack(traces: &Array3<f64>, hamming_weights: &Array3<f64>) -> Vec<i32> {
     key
 }
 
+fn resample_traces(
+    ref_indices: &Array1<usize>,
+    target_trace: &Array3<f64>,
+    clocks: &Array3<f64>,
+    window_size: usize,
+) -> Array3<f64> {
+    let resampled_trace = (0..16)
+        .into_par_iter()
+        .flat_map(|byte| {
+            (0..150)
+                .into_par_iter()
+                .flat_map(|x| {
+                    let trace = target_trace.slice(s![byte, x, ..]).to_owned();
+                    let clock = clocks.slice(s![byte, x, ..]).to_owned();
+
+                    let resampled_trace = resample(&ref_indices, &trace, &clock, window_size);
+                    resampled_trace.to_vec()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    Array3::from_shape_vec((16, 150, 50000), resampled_trace).unwrap()
+}
+
+fn resample(
+    ref_indices: &Array1<usize>,
+    power_traces: &Array1<f64>,
+    clock: &Array1<f64>,
+    window_size: usize,
+) -> Array1<f64> {
+    let clock_edges = find_edges(clock);
+    let edge_indices = arg_of_ones(&clock_edges);
+
+    let min_len = std::cmp::min(ref_indices.len(), edge_indices.len());
+    let ref_indices = ref_indices.slice(s![..min_len]);
+    let edge_indices = edge_indices.slice(s![..min_len]);
+
+    let offsets = edge_indices.map(|x| *x as isize) - ref_indices.map(|x| *x as isize);
+
+    let mut edge_count = 0;
+    let resampled_trace = (0..power_traces.len())
+        .map(|trace_index| {
+            if edge_count >= edge_indices.len() {
+                return 0.0;
+            }
+
+            let index = ref_indices[edge_count];
+            let left = index - window_size / 2;
+            let right = index + window_size / 2;
+            let target_index = trace_index + offsets[edge_count] as usize;
+
+            if left <= 0 || right >= power_traces.len() || target_index >= power_traces.len() {
+                return 0.0;
+            }
+
+            if trace_index >= left && trace_index < right {
+                return power_traces[target_index];
+            }
+
+            if trace_index == right {
+                edge_count += 1;
+            }
+
+            0.0
+        })
+        .collect::<Array1<_>>();
+
+    resampled_trace
+}
+
 fn attack_ds1(dataset: &str) {
     // 150 x 16
     let clear_text = load_clear_text(&format!("{dataset}/cleartext.txt"));
     // 16 x 256 x 150
     let hamming_weights = calculate_hamming_weights(&clear_text);
     // 16 x 150 x 50000
-    let traces = load_traces(dataset);
-    // let trace = traces.slice(s![0, 0..2, 0..300]).to_owned();
-    // plot1(&trace);
+    let power_traces = load_power_traces(dataset);
 
-    let key = cpa_attack(&traces, &hamming_weights);
+    let key = cpa_attack(&power_traces, &hamming_weights);
 
     dbg!(&key);
     dbg!(key.iter().sum::<i32>());
@@ -247,45 +271,33 @@ fn attack_ds2(dataset: &str) {
     // 16 x 256 x 150
     let hamming_weights = calculate_hamming_weights(&clear_text);
     // 16 x 150 x 50000
-    let traces = load_traces(dataset);
+    let power_traces = load_power_traces(dataset);
     // 16 x 150 x 50000
     let clocks = load_clocks(dataset);
 
+    // 1 x 1 x 50000
     let ref_clock = clocks.slice(s![0, 0, ..]).to_owned();
     let ref_edges = find_edges(&ref_clock);
     let ref_indices = arg_of_ones(&ref_edges);
 
-    let resampled_traces = (0..16)
-        .into_par_iter()
-        .flat_map(|byte| {
-            (0..150)
-                .into_par_iter()
-                .flat_map(|x| {
-                    let trace = traces.slice(s![byte, x, ..]).to_owned();
-                    let clock = clocks.slice(s![byte, x, ..]).to_owned();
+    let resampled_power_traces = resample_traces(&ref_indices, &power_traces, &clocks, 2);
 
-                    let resampled_trace = resample(&ref_indices, &trace, &clock, 2);
-                    resampled_trace.to_vec()
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-
-    let resampled_traces = Array3::from_shape_vec((16, 150, 50000), resampled_traces).unwrap();
-    // plot_ds1(&resampled_traces.slice(s![0, 0..50, ..]).to_owned());
-
-    let key = cpa_attack(&resampled_traces, &hamming_weights);
+    let key = cpa_attack(&resampled_power_traces, &hamming_weights);
 
     dbg!(&key);
     dbg!(key.iter().sum::<i32>());
     assert_eq!(key.iter().sum::<i32>(), 1434);
 }
-
 fn main() {
     let args = env::args().collect::<Vec<_>>();
 
-    if args.len() != 2 {
+    if args.len() != 2 || args.len() != 3 {
         panic!("Expected exactly one argument");
+    }
+
+    if args[2].eq("plot") {
+        plot_dataset2();
+        plot_dataset1();
     }
 
     if args[1].ends_with("1") {
