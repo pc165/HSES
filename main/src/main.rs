@@ -59,7 +59,6 @@ fn load_clocks(dataset: &str) -> Array3<f64> {
                 .unwrap()
                 .split_whitespace()
                 .map(|x| x.parse::<f64>().unwrap())
-                .map(|x| if x > 0.5 { 1.0 } else { 0.0 })
                 .collect::<Vec<_>>();
             return clock;
         })
@@ -291,20 +290,22 @@ fn attack_ds2(dataset: &str) {
 fn main() {
     let args = env::args().collect::<Vec<_>>();
 
-    if args.len() != 2 || args.len() != 3 {
-        panic!("Expected exactly one argument");
+    if args.len() == 3 && args[2].eq("plot") {
+        if args[1].ends_with("2") {
+            plot_dataset2(args[1].as_str());
+        }
+        if args[1].ends_with("1") {
+            plot_dataset1(args[1].as_str());
+        }
     }
 
-    if args[2].eq("plot") {
-        plot_dataset2();
-        plot_dataset1();
-    }
+    if args.len() == 2 {
+        if args[1].ends_with("1") {
+            attack_ds1(args[1].as_str());
+        }
 
-    if args[1].ends_with("1") {
-        attack_ds1(args[1].as_str());
-    }
-
-    if args[1].ends_with("2") {
-        attack_ds2(args[1].as_str());
+        if args[1].ends_with("2") {
+            attack_ds2(args[1].as_str());
+        }
     }
 }

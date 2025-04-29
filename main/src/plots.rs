@@ -84,8 +84,7 @@ pub fn plot_resampled_traces_with_reference_clock(
     plot.show()
 }
 
-pub fn plot_dataset2() {
-    let dataset = "dataset2";
+pub fn plot_dataset2(dataset: &str) {
     let power_traces = load_power_traces(dataset);
     let clocks = load_clocks(dataset);
 
@@ -93,11 +92,11 @@ pub fn plot_dataset2() {
     let ref_edges = find_edges(&ref_clock);
     let ref_indices = arg_of_ones(&ref_edges);
 
-    plot_power_traces(&power_traces.slice(s![0, 0..50, 0..500]));
+    plot_power_traces(&power_traces.slice(s![0, 45..50, 0..500]));
 
     plot_multiple_power_traces_with_clocks(
-        &power_traces.slice(s![0, 0..50, 0..500]),
-        &clocks.slice(s![0, 0..50, 0..500]),
+        &power_traces.slice(s![0, 45..50, 0..500]),
+        &clocks.slice(s![0, 45..50, 0..500]),
     );
 
     {
@@ -105,10 +104,11 @@ pub fn plot_dataset2() {
         let resampled_clocks = resample_traces(&ref_indices, &clocks, &clocks, 2);
         plot_resampled_traces_with_reference_clock(
             &ref_clock,
-            &power_traces.slice(s![0, 0, 0..500]),
-            &resampled_power_traces.slice(s![0, 0, 0..500]),
-            &resampled_clocks.slice(s![0, 0, 0..500]),
+            &power_traces.slice(s![0, 2, 0..500]),
+            &resampled_power_traces.slice(s![0, 2, 0..500]),
+            &resampled_clocks.slice(s![0, 2, 0..500]),
         );
+        plot_power_traces(&resampled_power_traces.slice(s![0, 0..50, 0..500]));
     }
 
     {
@@ -117,16 +117,16 @@ pub fn plot_dataset2() {
 
         plot_resampled_traces_with_reference_clock(
             &ref_clock,
-            &power_traces.slice(s![0, 0, 0..500]),
-            &resampled_power_traces.slice(s![0, 0, 0..500]),
-            &resampled_clocks.slice(s![0, 0, 0..500]),
+            &power_traces.slice(s![0, 2, 0..500]),
+            &resampled_power_traces.slice(s![0, 2, 0..500]),
+            &resampled_clocks.slice(s![0, 2, 0..500]),
         );
+        plot_power_traces(&resampled_power_traces.slice(s![0, 0..50, 0..500]));
     }
 }
 
-pub fn plot_dataset1() {
-    let dataset = "dataset1";
+pub fn plot_dataset1(dataset: &str) {
     let power_traces = load_power_traces(dataset);
 
-    plot_power_traces(&power_traces.slice(s![0, 0..50, 0..500]));
+    plot_power_traces(&power_traces.slice(s![0, 40..50, 0..500]));
 }
