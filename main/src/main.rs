@@ -9,6 +9,7 @@ use std::env;
 use std::fs::File;
 use std::io::read_to_string;
 use std::path::Path;
+use std::time::Instant;
 
 const SBOX: [i32; 256] = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -296,7 +297,10 @@ fn attack_ds2(dataset: &str) {
     assert_eq!(key.iter().sum::<i32>(), 1434);
 }
 fn main() {
+    println!("Thread pool size: {}", rayon::current_num_threads());
+
     let args = env::args().collect::<Vec<_>>();
+    let total_start_time = Instant::now();
 
     if args.len() == 3 && args[2].eq("plot") {
         if args[1].ends_with("2") {
@@ -316,4 +320,7 @@ fn main() {
             attack_ds2(args[1].as_str());
         }
     }
+
+    let total_duration = total_start_time.elapsed();
+    println!("Total execution time: {:?}", total_duration);
 }
