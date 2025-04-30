@@ -259,7 +259,11 @@ fn attack_ds1(dataset: &str) {
 
     let key = cpa_attack(&power_traces, &hamming_weights);
 
-    dbg!(&key);
+    dbg!(&key
+        .iter()
+        .map(|x| format!("0x{x:X}"))
+        .collect::<Vec<_>>()
+        .join(", "));
     dbg!(key.iter().sum::<i32>());
     assert_eq!(key.iter().sum::<i32>(), 1712);
 }
@@ -283,7 +287,11 @@ fn attack_ds2(dataset: &str) {
 
     let key = cpa_attack(&resampled_power_traces, &hamming_weights);
 
-    dbg!(&key);
+    dbg!(&key
+        .iter()
+        .map(|x| format!("0x{x:X}"))
+        .collect::<Vec<_>>()
+        .join(", "));
     dbg!(key.iter().sum::<i32>());
     assert_eq!(key.iter().sum::<i32>(), 1434);
 }
